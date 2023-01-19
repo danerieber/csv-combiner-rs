@@ -1,4 +1,4 @@
-use std::{path::PathBuf, fs::File, io::{BufReader, BufRead, Read}, thread, sync::{Arc, Mutex}};
+use std::{path::PathBuf, fs::File, io::{BufReader, BufRead}, thread, sync::{Arc, Mutex}};
 
 use clap::Parser;
 
@@ -14,91 +14,60 @@ struct Args {
 }
 
 fn main() {
+  const CAP: usize = 16 * 1024;
+
   let args = Args::parse();
-  let queue = Arc::new(Mutex::new(String::with_capacity(16 * 1024)));
-  let mut handles = vec![];
+  let queue = Arc::new(Mutex::new(String::with_capacity(CAP)));
+  let added_header_mtx = Arc::new(Mutex::new(false));
+  let mut handlers = vec![];
 
   for path in args.files {
     let queue = Arc::clone(&queue);
+    let added_header_mtx = Arc::clone(&added_header_mtx);
     let handle = thread::spawn(move|| {
       let file = File::open(path.as_path()).expect("Error opening file");
       let filename_csv = format!(",\"{}\"\n", path.file_name().unwrap().to_str().unwrap());
-      let reader = BufReader::new(file);
-      for line in reader.lines() {
-        if let Ok(text) = line {
-          let mut q = queue.lock().unwrap();
-          if q.len() + text.len() + filename_csv.len() > q.capacity() {
-            print!("{q}");
-            q.clear();
-          }
-          q.push_str(&text);
-          q.push_str(&filename_csv);
+      let mut reader = BufReader::new(file);
+
+      let mut header = String::new();
+      reader.read_line(&mut header).unwrap();
+      let header_trimmed = header.trim_end();
+      let trim_n_chars = header.len() - header_trimmed.len();
+
+      let mut added_header = added_header_mtx.lock().unwrap();
+      if !*added_header {
+        print!("{header_trimmed}{filename_csv}");
+        *added_header = true;
+      }
+
+      loop {
+        let mut q = queue.lock().unwrap();
+        match reader.read_line(&mut q) {
+          Ok(0) => {
+            break;
+          },
+          Ok(n) => {
+            let len = q.len();
+            if n <= trim_n_chars {
+              break;
+            }
+            q.truncate(len - trim_n_chars);
+            q.push_str(&filename_csv);
+            if len > CAP {
+              print!("{q}");
+              q.clear();
+            }
+          },
+          _ => {}
         }
       }
     });
-    handles.push(handle);
+    handlers.push(handle);
   }
 
-  for handle in handles {
+  for handle in handlers {
     handle.join().unwrap();
   }
 
   print!("{}", queue.lock().unwrap());
 }
-
-// fn main() {
-//     let args = Args::parse();
-    
-//     // Build vec of readers for threads to use
-//     let mut readers = vec![];
-//     for path in args.files {
-//       let file = File::open(path.as_path()).expect("Error opening file");
-//       let file_name = format!(",\"{}\"\n", path.file_name().unwrap().to_str().unwrap());
-//       let reader = BufReader::new(file);
-//       readers.push((reader, file_name));
-//     }
-
-//     // Extract CSV header from one of the files (just use the first one)
-//     let mut csv_header = String::new();
-//     readers[0].0.read_line(&mut csv_header).expect("Error reading CSV header from first file");
-//     // Remove trailing newline and add "filename" column header
-//     csv_header.pop();
-//     csv_header.push_str(",\"filename\"\n");
-//     // Print CSV header only once
-//     print!("{}", csv_header);
-
-//     // Use a synchronous, bounded channel to queue lines for output
-//     let (tx, rx) = sync_channel(100);
-
-//     for (reader, file_name) in readers {
-//       let tx = tx.clone();
-//       // Spawn a new thread that sends each line of each file as a message over the channel
-//       thread::spawn(move|| {
-//         for line in reader.lines().skip(1) {
-//           if let Ok(text) = line {
-//             tx.send(format!("{text}{file_name}")).unwrap();
-//           }
-//         }
-//       });
-//     }
-
-//     drop(tx); // Drop last sender to stop rx waiting for message
-
-//     // Create large string that we use as a buffer
-//     const CAP: usize = 16 * 1024;
-//     let mut q = String::with_capacity(CAP);
-
-//     while let Ok(msg) = rx.recv() {
-//       // if we cannot add the current msg to the queue, print to stdout and clear queue
-//       if q.len() + msg.len() > CAP {
-//         print!("{q}");
-//         q.clear();
-//       }
-//       q.push_str(&msg);
-//     }
-
-//     // print leftover data in queue
-//     if q.len() > 0 {
-//       print!("{q}");
-//     }
-// }
