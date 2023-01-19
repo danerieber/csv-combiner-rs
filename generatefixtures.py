@@ -24,10 +24,10 @@ def write_file(writer, length, categories):
 
 def main():
     for fn, categories in FILES.items():
-        with open(path.join(DIR, 'fixtures', fn), 'w', encoding='utf-8') as fh:
+        with open(path.join(DIR, 'fixtures_big', fn), 'w', encoding='utf-8') as fh:
             write_file(
                 csv.writer(fh, doublequote=False, escapechar='\\', quoting=csv.QUOTE_ALL),
-                random.randint(10000, 100000),
+                random.randint(1000000, 10000000),
                 categories
             )
 
