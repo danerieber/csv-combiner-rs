@@ -1,4 +1,4 @@
-use std::{path::PathBuf, fs::File, io::{BufReader, BufRead, BufWriter, Write}, thread, sync::{Arc, Mutex}};
+use std::{path::PathBuf, fs::File, io::{BufReader, BufRead, BufWriter, Write, self}, thread, sync::{Arc, Mutex, MutexGuard}, fmt::write};
 
 use clap::Parser;
 
@@ -13,18 +13,23 @@ struct Args {
     files: Vec<PathBuf>
 }
 
+// On my local machine, I found that very big buffers work much faster
+// For example, if we use BUFFER_CAPACITY 16kb and THREAD_BUFFER_CAPACITY 1kb,
+// the program runs nearly twice as slow
+pub const BUFFER_CAPACITY: usize = 256 * 1024;
+pub const THREAD_BUFFER_CAPACITY: usize = 16 * 1024;
+
 fn main() {
   let args = Args::parse();
   let mut handles = vec![];
 
-  // Create a thread-safe buffered writer to stdout
-  // Stdout has significantly better performance when buffered
-  let writer = Arc::new(Mutex::new(BufWriter::new(std::io::stdout())));
+  // A Vec<u8> buffer that will be written to stdout and cleared when it reaches capacity
+  let stdout_buf = Arc::new(Mutex::new(Vec::with_capacity(BUFFER_CAPACITY)));
 
   let is_first_line = Arc::new(Mutex::new(true));
 
   for path in args.files {
-    let writer = Arc::clone(&writer);
+    let stdout_buf = Arc::clone(&stdout_buf);
     let is_first_line = Arc::clone(&is_first_line);
 
     let handle = thread::spawn(move|| {
@@ -38,7 +43,7 @@ fn main() {
       // Use bytes vector to read a line from the file
       // Before, String was used, but there was lots of overhead with utf8 conversions
       // Sending bytes directly to the writer should eliminate that overhead
-      let mut buf = vec![];
+      let mut buf = Vec::with_capacity(THREAD_BUFFER_CAPACITY);
 
       // Read the first line regardless of whether it is output
       // This means the CSV header will be skipped for other files
@@ -54,20 +59,41 @@ fn main() {
       }
       drop(is_first);
 
-      loop {
+      // Closure to take care of writing to output buffer and flushing output buffer to stdout if it reaches capacity
+      let write_buf = |out_buf: &mut MutexGuard<Vec<u8>>, buf: &mut Vec<u8>| {
+        out_buf.write_all(&buf).unwrap();
+        if out_buf.len() >= BUFFER_CAPACITY {
+          let mut stdout = io::stdout().lock();
+          stdout.write_all(&out_buf).unwrap();
+          out_buf.clear();
+        }
         buf.clear();
+      };
+
+      loop {
         match reader.read_until(b'\n', &mut buf) {
-          Ok(0) => break,
-          Ok(mut n) => {
+          Ok(0) => {
+            // Write any left over data that may still be in the thread buffer
+            let mut out_buf = stdout_buf.lock().unwrap();
+            write_buf(&mut out_buf, &mut buf);
+            break;
+          },
+          Ok(_) => {
             // Strip both LF and CRLF line endings
-            while buf[n-1] == b'\n' || buf[n-1] == b'\r' {
-              n -= 1;
+            while buf[buf.len()-1] == b'\n' || buf[buf.len()-1] == b'\r' {
+              buf.pop();
             }
-            // Write CSV row appended by filename column
-            let mut w = writer.lock().unwrap();
-            w.write_all(&buf[..n]).unwrap();
-            w.write_all(&filename_csv).unwrap();
-            drop(w);
+            // Append filename column to buffer
+            buf.write_all(&filename_csv).unwrap();
+
+            // Try to acquire lock on output buffer. If we can't, no worries, just keep reading data
+            if let Ok(mut out_buf) = stdout_buf.try_lock() {
+              write_buf(&mut out_buf, &mut buf);
+            // HOWEVER, if our thread-local buffer fills up, we must acquire the lock and write our data
+            } else if buf.len() >= THREAD_BUFFER_CAPACITY {
+              let mut out_buf = stdout_buf.lock().unwrap();
+              write_buf(&mut out_buf, &mut buf);
+            }
           },
           _ => break
         }
@@ -79,4 +105,9 @@ fn main() {
   for handle in handles {
     handle.join().unwrap();
   }
+
+  // Write any left over data still in the output buffer
+  let out_buf = stdout_buf.lock().unwrap();
+  let mut stdout = io::stdout().lock();
+  stdout.write_all(&out_buf).unwrap();
 }
