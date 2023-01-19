@@ -1,4 +1,4 @@
-use std::{path::PathBuf, fs::File, io::{BufReader, BufRead, BufWriter, Write, self}, thread, sync::{Arc, Mutex, MutexGuard}, fmt::write};
+use std::{path::PathBuf, fs::File, io::{BufReader, BufRead, Write, self}, thread, sync::{Arc, Mutex, MutexGuard}};
 
 use clap::Parser;
 
