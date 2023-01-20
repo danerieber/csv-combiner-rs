@@ -1,3 +1,5 @@
+mod tests;
+
 use std::{path::PathBuf, fs::File, io::{BufReader, BufRead, Write, self}, thread, sync::{Arc, Mutex, MutexGuard}};
 
 use clap::Parser;
@@ -10,6 +12,7 @@ use clap::Parser;
 #[command(long_about = None)]
 struct Args {
     /// Specify input CSV files
+    #[clap(required = true)]
     files: Vec<PathBuf>,
 
     /// Limit the maximum number of threads
@@ -109,7 +112,7 @@ fn main() {
         });
 
         handles.push(handle);
-        
+
       } else {
         break;
       }
