@@ -40,13 +40,13 @@ use assert_cmd::Command;
     }
   }
 
-  #[test]
-  fn combines_multiples_files() {
+  fn combines_multiples_files_base(threads: &str) {
     let mut cmd = Command::cargo_bin("csv-combiner-rs").unwrap();
     let output = cmd
       .arg("fixtures/accessories.csv")
       .arg("fixtures/clothing.csv")
       .arg("fixtures/household_cleaners.csv")
+      .arg("-t").arg(threads)
       .assert().get_output().stdout.clone();
     let output_string = String::from_utf8(output).unwrap();
     let mut output_lines = output_string.lines();
@@ -80,5 +80,15 @@ use assert_cmd::Command;
         }
       }
     }
+  }
+
+  #[test]
+  fn combines_multiples_files() {
+    combines_multiples_files_base("64");
+  }
+
+  #[test]
+  fn combines_multiples_files_with_thread_limit() {
+    combines_multiples_files_base("2");
   }
 }
